@@ -38,6 +38,7 @@ class DefaultConfig(object):
     a_k_max = 1
     q_filter_widths = 5
     a_filter_widths = 5
+    init_scale = 0.25
 
     max_grad_norm = 5
     num_layers = 2
@@ -115,6 +116,21 @@ def get_config():
         return DefaultConfig()
     else:
         raise ValueError("Invalid config name: %s", FLAGS.config)
+
+
+def batch_iter(data, batch_size, shuffle=False):
+    data_size = len(data[0])
+    num_batches = int(data_size / batch_size)
+    if shuffle:
+        shuffle_indices = np.random.permutation(np.arange(data_size))
+        shuffled_data = [data[i][shuffle_indices] for i in range(len(data))]
+    else:
+        shuffled_data = data
+    
+    for batch_num in range(num_batches):
+        start_index = batch_num * batch_size
+        end_index = min((batch_num + 1) * batch_size, data_size)
+        yield [shuffled_data[i][start_index:end_index] for i in range(len(shuffled_data))]
 
 
 def main(_):
@@ -197,29 +213,33 @@ def main(_):
             m = DeepQAModel(is_training=False, config=config)
     
         tf.initialize_all_variables().run()
-        for i in range(20000):
-            step = session.run([m.train_step], 
-                        {m.q_data : q_train,
-                         m.a_data : a_train,
+
+        i = 0
+        for epoch in range(1000):
+            train_data = [q_train, a_train, y_train]
+            batches = enumerate(batch_iter(train_data, config.batch_size))
+            for _, batch_data in batches:
+                q_batch, a_batch, y_batch = batch_data
+                step = session.run([m.train_step], 
+                        {m.q_data : q_batch,
+                         m.a_data : a_batch,
                          m.embedding : vocab_emb,
-                         m.labels : y_train})
+                         m.labels : y_batch})
 
-            if i % 100 == 0:
-                loss, acc = session.run([m.loss, m.accuracy], 
-                            {m.q_data : q_train,
-                             m.a_data : a_train,
-                             m.embedding : vocab_emb,
-                             m.labels : y_train})
-                print("[TRAIN] Step", i, ": acc=", acc, "loss=", loss)
-                loss, acc = session.run([m.loss, m.accuracy], 
-                            {m.q_data : q_dev,
-                             m.a_data : a_dev,
-                             m.embedding : vocab_emb,
-                             m.labels : y_dev})
-                print("[DEV] Step", i, ": acc=", acc, "loss=", loss)
-
-
-   
+                if i % 100 == 0:
+                    loss, acc = session.run([m.loss, m.accuracy], 
+                                {m.q_data : q_train,
+                                 m.a_data : a_train,
+                                 m.embedding : vocab_emb,
+                                 m.labels : y_train})
+                    print("[TRAIN] Step", i, ": acc=", acc, "loss=", loss)
+                    loss, acc = session.run([m.loss, m.accuracy], 
+                                {m.q_data : q_dev,
+                                 m.a_data : a_dev,
+                                 m.embedding : vocab_emb,
+                                 m.labels : y_dev})
+                    print("[DEV] Step", i, ": acc=", acc, "loss=", loss)
+                i += 1
 
         session.close()
 
