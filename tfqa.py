@@ -9,7 +9,7 @@ import sys
 import time
 from collections import defaultdict
 import subprocess
-
+from collections import defaultdict
 
 import numpy as np
 import tensorflow as tf
@@ -58,59 +58,63 @@ class DeepQAModel(object):
             self.q_inputs = tf.nn.embedding_lookup(self.embedding, self.q_data)
             self.a_inputs = tf.nn.embedding_lookup(self.embedding, self.a_data)
 
-        # expand dims to [batch, height, width, channel] = [#sentence, #word, dim, 1]
-        self.q_tf_in = tf.expand_dims(self.q_inputs, 3)
-        self.a_tf_in = tf.expand_dims(self.a_inputs, 3)
-        
-        # define the filter: [filter_height, filter_width, in_channels, out_channels]
-        q_filter = tf.get_variable("q_filter", [config.q_filter_widths, 
-                                                     config.ndim,
-                                                     1,
-                                                     config.nkernels])
-        q_stride = [1, 1, config.ndim, 1]
-        q_conv = tf.nn.conv2d(input=self.q_tf_in, filter=q_filter, strides=q_stride, padding="SAME")
-        q_bias = tf.get_variable("q_bias", [config.nkernels], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
-        q_act = tf.tanh(tf.nn.bias_add(q_conv, q_bias))
-        q_pool = tf.nn.max_pool(value=q_act, ksize=[1, q_act.get_shape()[1], 1, 1], strides=[1, q_act.get_shape()[1], 1, 1], padding='SAME')
-        self.q_feat = tf.squeeze(q_pool)
-         
+            # expand dims to [batch, height, width, channel] = [#sentence, #word, dim, 1]
+            self.q_tf_in = tf.expand_dims(self.q_inputs, 3)
+            self.a_tf_in = tf.expand_dims(self.a_inputs, 3)
+            
+            # define the filter: [filter_height, filter_width, in_channels, out_channels]
+            q_filter = tf.get_variable("q_filter", [config.q_filter_widths, 
+                                                         config.ndim,
+                                                         1,
+                                                         config.nkernels])
+            q_stride = [1, 1, config.ndim, 1]
+            q_conv = tf.nn.conv2d(input=self.q_tf_in, filter=q_filter, strides=q_stride, padding="SAME")
+            q_bias = tf.get_variable("q_bias", [config.nkernels], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
+            q_act = tf.tanh(tf.nn.bias_add(q_conv, q_bias))
+            q_pool = tf.nn.max_pool(value=q_act, ksize=[1, q_act.get_shape()[1], 1, 1], strides=[1, q_act.get_shape()[1], 1, 1], padding='SAME')
+            self.q_feat = tf.squeeze(q_pool)
+             
 
-        # define the filter: [filter_height, filter_width, in_channels, out_channels]
-        a_filter = tf.get_variable("a_filter", [config.a_filter_widths, 
-                                                     config.ndim,
-                                                     1,
-                                                     config.nkernels])
-        a_stride = [1, 1, config.ndim, 1]
-        a_conv = tf.nn.conv2d(input=self.a_tf_in, filter=a_filter, strides=a_stride, padding="SAME")
-        a_bias = tf.get_variable("a_bias", [config.nkernels], initializer=tf.constant_initializer(value=0.1, dtype=tf.float32))
-        a_act = tf.tanh(tf.nn.bias_add(a_conv, a_bias))
-        a_pool = tf.nn.max_pool(value=a_act, ksize=[1, a_act.get_shape()[1], 1, 1], strides=[1, a_act.get_shape()[1], 1, 1], padding='SAME')
-        self.a_feat = tf.squeeze(a_pool)
+            # define the filter: [filter_height, filter_width, in_channels, out_channels]
+            a_filter = tf.get_variable("a_filter", [config.a_filter_widths, 
+                                                         config.ndim,
+                                                         1,
+                                                         config.nkernels])
+            a_stride = [1, 1, config.ndim, 1]
+            a_conv = tf.nn.conv2d(input=self.a_tf_in, filter=a_filter, strides=a_stride, padding="SAME")
+            a_bias = tf.get_variable("a_bias", [config.nkernels], initializer=tf.constant_initializer(value=0.1, dtype=tf.float32))
+            a_act = tf.tanh(tf.nn.bias_add(a_conv, a_bias))
+            a_pool = tf.nn.max_pool(value=a_act, ksize=[1, a_act.get_shape()[1], 1, 1], strides=[1, a_act.get_shape()[1], 1, 1], padding='SAME')
+            self.a_feat = tf.squeeze(a_pool)
 
-        sim_mat = tf.get_variable("sim_mat", [config.nkernels, config.nkernels])
-        self.sim_value = tf.squeeze(tf.batch_matmul(tf.expand_dims(tf.matmul(self.q_feat, sim_mat), 1), tf.expand_dims(self.a_feat, 2)), [2])
-        self.concat = tf.concat(1, [self.q_feat, self.sim_value, self.a_feat])
-        
-        ndim = config.nkernels * 2 + 1 
-        W1 = tf.get_variable("W1", [ndim, ndim], initializer=tf.random_uniform_initializer(minval=-np.sqrt(6.0/ndim), maxval=np.sqrt(6.0/ndim), dtype=tf.float32))
-        b1 = tf.get_variable("b1", [ndim], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
-        l1_out = tf.tanh(tf.nn.bias_add(tf.matmul(self.concat, W1), b1))
+            sim_mat = tf.get_variable("sim_mat", [config.nkernels, config.nkernels])
+            self.sim_value = tf.squeeze(tf.batch_matmul(tf.expand_dims(tf.matmul(self.q_feat, sim_mat), 1), tf.expand_dims(self.a_feat, 2)), [2])
+            self.concat = tf.concat(1, [self.q_feat, self.sim_value, self.a_feat])
+            
+            ndim = config.nkernels * 2 + 1 
+            W1 = tf.get_variable("W1", [ndim, ndim], initializer=tf.random_uniform_initializer(minval=-np.sqrt(6.0/ndim), maxval=np.sqrt(6.0/ndim), dtype=tf.float32))
+            b1 = tf.get_variable("b1", [ndim], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
+            l1_out = tf.tanh(tf.nn.bias_add(tf.matmul(self.concat, W1), b1))
 
-        W2 = tf.get_variable("W2", [ndim, 2], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
-        b2 = tf.get_variable("b2", [2], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
+            W2 = tf.get_variable("W2", [ndim, 2], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
+            b2 = tf.get_variable("b2", [2], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
 
-        logits = tf.nn.bias_add(tf.matmul(l1_out, W2), b2)
-        self.labels = tf.placeholder(tf.int32, [None])
-        onehot_labels = tf.one_hot(self.labels, 2)
-        self.loss = tf.contrib.losses.softmax_cross_entropy(logits, onehot_labels)
-        
-        self.train_step = tf.train.AdadeltaOptimizer(learning_rate=config.learning_rate, rho=0.95, epsilon=1e-6).minimize(self.loss)
+            logits = tf.nn.bias_add(tf.matmul(l1_out, W2), b2)
+            self.labels = tf.placeholder(tf.int32, [None])
+            onehot_labels = tf.one_hot(self.labels, 2)
+            self.loss = tf.contrib.losses.softmax_cross_entropy(logits, onehot_labels)
 
-        self.y_hat = tf.argmax(tf.nn.softmax(logits),1)
-        correct_prediction = tf.equal(tf.cast(self.y_hat, tf.int32), self.labels)
-        self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+            self.y_hat = tf.argmax(tf.nn.softmax(logits),1)
+            self.y_score = tf.nn.softmax(logits)
+            correct_prediction = tf.equal(tf.cast(self.y_hat, tf.int32), self.labels)
+            self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
-        
+            if not is_training:
+                return
+
+            self.train_step = tf.train.AdadeltaOptimizer(learning_rate=config.learning_rate, rho=0.95, epsilon=1e-6).minimize(self.loss)
+
+                
 def get_config(): 
     if FLAGS.config == "default":
         return DefaultConfig()
@@ -131,6 +135,23 @@ def batch_iter(data, batch_size, shuffle=False):
         start_index = batch_num * batch_size
         end_index = min((batch_num + 1) * batch_size, data_size)
         yield [shuffled_data[i][start_index:end_index] for i in range(len(shuffled_data))]
+
+def map_score(qids, labels, preds):
+    qid2cand = defaultdict(list)
+    for qid, label, pred in zip(qids, labels, preds):
+        qid2cand[qid].append((pred, label))
+
+    average_precs = []
+    for qid, candidates in qid2cand.iteritems():
+        average_prec = 0
+        running_correct_count = 0
+        for i, (score, label) in enumerate(sorted(candidates, reverse=True), 1):
+            if label > 0:
+                running_correct_count += 1
+                average_prec += float(running_correct_count) / i
+        average_precs.append(average_prec / (running_correct_count + 1e-6))
+    map_score = sum(average_precs) / len(average_precs)
+    return map_score
 
 
 def main(_):
@@ -176,6 +197,7 @@ def main(_):
     print('q_train:', q_train.shape)
     print('q_dev', q_dev.shape)
     print('q_test', q_test.shape)
+    print('qids', qids_dev.shape, qids_test.shape)
 
     print('a_train:', a_train.shape)
     print('a_dev:', a_dev.shape)
@@ -209,9 +231,12 @@ def main(_):
     #with tf.Graph().as_default, tf.Session() as session:
     with tf.Session() as session:
         initializer = tf.random_uniform_initializer(-config.init_scale, config.init_scale)
-        with tf.variable_scope("model", reuse=None, initializer=initializer):
-            m = DeepQAModel(is_training=False, config=config)
-    
+        with tf.device('/cpu:0'):
+            with tf.variable_scope("model", reuse=None, initializer=initializer):
+                m = DeepQAModel(is_training=True, config=config)
+            with tf.variable_scope("model", reuse=True, initializer=initializer):
+                mv = DeepQAModel(is_training=False, config=config)
+
         tf.initialize_all_variables().run()
 
         i = 0
@@ -227,18 +252,21 @@ def main(_):
                          m.labels : y_batch})
 
                 if i % 100 == 0:
-                    loss, acc = session.run([m.loss, m.accuracy], 
-                                {m.q_data : q_train,
-                                 m.a_data : a_train,
-                                 m.embedding : vocab_emb,
-                                 m.labels : y_train})
-                    print("[TRAIN] Step", i, ": acc=", acc, "loss=", loss)
-                    loss, acc = session.run([m.loss, m.accuracy], 
-                                {m.q_data : q_dev,
-                                 m.a_data : a_dev,
-                                 m.embedding : vocab_emb,
-                                 m.labels : y_dev})
-                    print("[DEV] Step", i, ": acc=", acc, "loss=", loss)
+                    loss, acc = session.run([mv.loss, mv.accuracy], 
+                                {mv.q_data : q_train,
+                                 mv.a_data : a_train,
+                                 mv.embedding : vocab_emb,
+                                 mv.labels : y_train})
+                    print("[TRAIN] Step %4d, acc=%5.5f, loss=%5.5f" %(i, acc, loss))
+                    
+                    y_score, acc = session.run([mv.y_score, mv.accuracy], 
+                                {mv.q_data : q_dev,
+                                 mv.a_data : a_dev,
+                                 mv.embedding : vocab_emb,
+                                 mv.labels : y_dev})
+                    #print(qids_dev.shape, y_dev.shape, y_score.shape)
+                    map_sc = map_score(qids_dev, y_dev, y_score[:,1])
+                    print("[TRAIN] Step %4d, ============ MAP =======: %5.5f" %(i, map_sc))
                 i += 1
 
         session.close()
