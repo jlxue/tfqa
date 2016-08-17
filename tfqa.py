@@ -53,66 +53,73 @@ class DeepQAModel(object):
     def __init__(self, is_training, config):
         self.q_data = tf.placeholder(tf.int32, [None, 33])
         self.a_data = tf.placeholder(tf.int32, [None, 40])
+        self.q_overlap = tf.placeholder(tf.int32, [None, 33])
+        self.a_overlap = tf.placeholder(tf.int32, [None, 40])
+    
         self.embedding = tf.placeholder(tf.float32, [None, 50])
+        self.embedding_overlap = tf.placeholder(tf.float32, [None, 5])
         with tf.device("/cpu:0"):
             self.q_inputs = tf.nn.embedding_lookup(self.embedding, self.q_data)
             self.a_inputs = tf.nn.embedding_lookup(self.embedding, self.a_data)
+            self.q_overlp = tf.nn.embedding_lookup(self.embedding_overlap, self.q_overlap)
+            self.a_overlp = tf.nn.embedding_lookup(self.embedding_overlap, self.a_overlap)
 
-            # expand dims to [batch, height, width, channel] = [#sentence, #word, dim, 1]
-            self.q_tf_in = tf.expand_dims(self.q_inputs, 3)
-            self.a_tf_in = tf.expand_dims(self.a_inputs, 3)
-            
-            # define the filter: [filter_height, filter_width, in_channels, out_channels]
-            q_filter = tf.get_variable("q_filter", [config.q_filter_widths, 
-                                                         config.ndim,
-                                                         1,
-                                                         config.nkernels])
-            q_stride = [1, 1, config.ndim, 1]
-            q_conv = tf.nn.conv2d(input=self.q_tf_in, filter=q_filter, strides=q_stride, padding="SAME")
-            q_bias = tf.get_variable("q_bias", [config.nkernels], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
-            q_act = tf.tanh(tf.nn.bias_add(q_conv, q_bias))
-            q_pool = tf.nn.max_pool(value=q_act, ksize=[1, q_act.get_shape()[1], 1, 1], strides=[1, q_act.get_shape()[1], 1, 1], padding='SAME')
-            self.q_feat = tf.squeeze(q_pool)
-             
 
-            # define the filter: [filter_height, filter_width, in_channels, out_channels]
-            a_filter = tf.get_variable("a_filter", [config.a_filter_widths, 
-                                                         config.ndim,
-                                                         1,
-                                                         config.nkernels])
-            a_stride = [1, 1, config.ndim, 1]
-            a_conv = tf.nn.conv2d(input=self.a_tf_in, filter=a_filter, strides=a_stride, padding="SAME")
-            a_bias = tf.get_variable("a_bias", [config.nkernels], initializer=tf.constant_initializer(value=0.1, dtype=tf.float32))
-            a_act = tf.tanh(tf.nn.bias_add(a_conv, a_bias))
-            a_pool = tf.nn.max_pool(value=a_act, ksize=[1, a_act.get_shape()[1], 1, 1], strides=[1, a_act.get_shape()[1], 1, 1], padding='SAME')
-            self.a_feat = tf.squeeze(a_pool)
+        # expand dims to [batch, height, width, channel] = [#sentence, #word, dim, 1]
+        self.q_tf_in = tf.expand_dims(self.q_inputs, 3)
+        self.a_tf_in = tf.expand_dims(self.a_inputs, 3)
+        
+        # define the filter: [filter_height, filter_width, in_channels, out_channels]
+        q_filter = tf.get_variable("q_filter", [config.q_filter_widths, 
+                                                     config.ndim,
+                                                     1,
+                                                     config.nkernels])
+        q_stride = [1, 1, config.ndim, 1]
+        q_conv = tf.nn.conv2d(input=self.q_tf_in, filter=q_filter, strides=q_stride, padding="SAME")
+        q_bias = tf.get_variable("q_bias", [config.nkernels], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
+        q_act = tf.tanh(tf.nn.bias_add(q_conv, q_bias))
+        q_pool = tf.nn.max_pool(value=q_act, ksize=[1, q_act.get_shape()[1], 1, 1], strides=[1, q_act.get_shape()[1], 1, 1], padding='SAME')
+        self.q_feat = tf.squeeze(q_pool)
+         
 
-            sim_mat = tf.get_variable("sim_mat", [config.nkernels, config.nkernels])
-            self.sim_value = tf.squeeze(tf.batch_matmul(tf.expand_dims(tf.matmul(self.q_feat, sim_mat), 1), tf.expand_dims(self.a_feat, 2)), [2])
-            self.concat = tf.concat(1, [self.q_feat, self.sim_value, self.a_feat])
-            
-            ndim = config.nkernels * 2 + 1 
-            W1 = tf.get_variable("W1", [ndim, ndim], initializer=tf.random_uniform_initializer(minval=-np.sqrt(6.0/ndim), maxval=np.sqrt(6.0/ndim), dtype=tf.float32))
-            b1 = tf.get_variable("b1", [ndim], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
-            l1_out = tf.tanh(tf.nn.bias_add(tf.matmul(self.concat, W1), b1))
+        # define the filter: [filter_height, filter_width, in_channels, out_channels]
+        a_filter = tf.get_variable("a_filter", [config.a_filter_widths, 
+                                                     config.ndim,
+                                                     1,
+                                                     config.nkernels])
+        a_stride = [1, 1, config.ndim, 1]
+        a_conv = tf.nn.conv2d(input=self.a_tf_in, filter=a_filter, strides=a_stride, padding="SAME")
+        a_bias = tf.get_variable("a_bias", [config.nkernels], initializer=tf.constant_initializer(value=0.1, dtype=tf.float32))
+        a_act = tf.tanh(tf.nn.bias_add(a_conv, a_bias))
+        a_pool = tf.nn.max_pool(value=a_act, ksize=[1, a_act.get_shape()[1], 1, 1], strides=[1, a_act.get_shape()[1], 1, 1], padding='SAME')
+        self.a_feat = tf.squeeze(a_pool)
 
-            W2 = tf.get_variable("W2", [ndim, 2], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
-            b2 = tf.get_variable("b2", [2], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
+        sim_mat = tf.get_variable("sim_mat", [config.nkernels, config.nkernels])
+        self.sim_value = tf.squeeze(tf.batch_matmul(tf.expand_dims(tf.matmul(self.q_feat, sim_mat), 1), tf.expand_dims(self.a_feat, 2)), [2])
+        self.concat = tf.concat(1, [self.q_feat, self.sim_value, self.a_feat])
+        
+        ndim = config.nkernels * 2 + 1 
+        W1 = tf.get_variable("W1", [ndim, ndim], initializer=tf.random_uniform_initializer(minval=-np.sqrt(6.0/ndim), maxval=np.sqrt(6.0/ndim), dtype=tf.float32))
+        b1 = tf.get_variable("b1", [ndim], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
+        l1_out = tf.tanh(tf.nn.bias_add(tf.matmul(self.concat, W1), b1))
 
-            logits = tf.nn.bias_add(tf.matmul(l1_out, W2), b2)
-            self.labels = tf.placeholder(tf.int32, [None])
-            onehot_labels = tf.one_hot(self.labels, 2)
-            self.loss = tf.contrib.losses.softmax_cross_entropy(logits, onehot_labels)
+        W2 = tf.get_variable("W2", [ndim, 2], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
+        b2 = tf.get_variable("b2", [2], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
 
-            self.y_hat = tf.argmax(tf.nn.softmax(logits),1)
-            self.y_score = tf.nn.softmax(logits)
-            correct_prediction = tf.equal(tf.cast(self.y_hat, tf.int32), self.labels)
-            self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+        logits = tf.nn.bias_add(tf.matmul(l1_out, W2), b2)
+        self.labels = tf.placeholder(tf.int32, [None])
+        onehot_labels = tf.one_hot(self.labels, 2)
+        self.loss = tf.contrib.losses.softmax_cross_entropy(logits, onehot_labels)
 
-            if not is_training:
-                return
+        self.y_hat = tf.argmax(tf.nn.softmax(logits),1)
+        self.y_score = tf.nn.softmax(logits)
+        correct_prediction = tf.equal(tf.cast(self.y_hat, tf.int32), self.labels)
+        self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
-            self.train_step = tf.train.AdadeltaOptimizer(learning_rate=config.learning_rate, rho=0.95, epsilon=1e-6).minimize(self.loss)
+        if not is_training:
+            return
+
+        self.train_step = tf.train.AdadeltaOptimizer(learning_rate=config.learning_rate, rho=0.95, epsilon=1e-6).minimize(self.loss)
 
                 
 def get_config(): 
@@ -189,6 +196,8 @@ def main(_):
     y_test = np.load(os.path.join(data_dir, 'test.labels.npy'))
     qids_test = np.load(os.path.join(data_dir, 'test.qids.npy'))
 
+    print("overlap:", q_overlap_train[-10:, -10:], a_overlap_train[-10:, -10:])    
+
     print('y_train:', np.unique(y_train, return_counts=True), y_train.shape, y_train[:10])
     print('y_dev:', np.unique(y_dev, return_counts=True))
     print('y_test:', np.unique(y_test, return_counts=True))
@@ -231,7 +240,7 @@ def main(_):
     #with tf.Graph().as_default, tf.Session() as session:
     with tf.Session() as session:
         initializer = tf.random_uniform_initializer(-config.init_scale, config.init_scale)
-        with tf.device('/cpu:0'):
+        with tf.device('/gpu:0'):
             with tf.variable_scope("model", reuse=None, initializer=initializer):
                 m = DeepQAModel(is_training=True, config=config)
             with tf.variable_scope("model", reuse=True, initializer=initializer):
