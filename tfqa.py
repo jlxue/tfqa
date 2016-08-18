@@ -111,6 +111,9 @@ class DeepQAModel(object):
         onehot_labels = tf.one_hot(self.labels, 2)
         self.loss = tf.contrib.losses.softmax_cross_entropy(logits, onehot_labels)
 
+        # apply L2 regularization
+        self.reg_loss = self.loss + tf.contrib.layers.apply_regularization(tf.contrib.layers.l2_regularizer(1e-2), [q_filter, q_bias, a_filter, a_bias, sim_mat, W1, b1, W2, b2])
+
         self.y_hat = tf.argmax(tf.nn.softmax(logits),1)
         self.y_score = tf.nn.softmax(logits)
         correct_prediction = tf.equal(tf.cast(self.y_hat, tf.int32), self.labels)
@@ -119,7 +122,7 @@ class DeepQAModel(object):
         if not is_training:
             return
 
-        self.train_step = tf.train.AdadeltaOptimizer(learning_rate=config.learning_rate, rho=0.95, epsilon=1e-6).minimize(self.loss)
+        self.train_step = tf.train.AdadeltaOptimizer(learning_rate=config.learning_rate, rho=0.95, epsilon=1e-6).minimize(self.reg_loss)
 
                 
 def get_config(): 
@@ -261,7 +264,7 @@ def main(_):
                          m.labels : y_batch})
 
                 if i % 100 == 0:
-                    loss, acc = session.run([mv.loss, mv.accuracy], 
+                    loss, acc = session.run([mv.reg_loss, mv.accuracy], 
                                 {mv.q_data : q_train,
                                  mv.a_data : a_train,
                                  mv.embedding : vocab_emb,
