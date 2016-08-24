@@ -22,16 +22,18 @@ flags.DEFINE_string(
     "mode", "TRAIN",
     "The data set used. Possible options are: TRAIN, TRAIN_ALL.")
 flags.DEFINE_string("config", "default", "The config names")
+flags.DEFINE_float("l2_reg", 3e-3, "l2 regularization")
 FLAGS = flags.FLAGS
 
 class DefaultConfig(object):
     """The hyper parameters."""
     n_outs = 2
     n_epochs = 25
-    batch_size = 50
+    batch_size = 100
     learning_rate = 0.1
     max_norm = 0
-    ndim = 50
+    worddim = 50
+    overlapdim = 5
     dropout_rate = 0.5
     nkernels = 100
     q_k_max = 1
@@ -39,6 +41,7 @@ class DefaultConfig(object):
     q_filter_widths = 5
     a_filter_widths = 5
     init_scale = 0.25
+    l2_reg = 1e-4
 
     max_grad_norm = 5
     num_layers = 2
@@ -56,25 +59,32 @@ class DeepQAModel(object):
         self.q_overlap = tf.placeholder(tf.int32, [None, 33])
         self.a_overlap = tf.placeholder(tf.int32, [None, 40])
     
-        self.embedding = tf.placeholder(tf.float32, [None, 50])
-        self.embedding_overlap = tf.placeholder(tf.float32, [None, 5])
+        self.embedding = tf.placeholder(tf.float32, [None, config.worddim])
+        #self.embedding_overlap = tf.placeholder(tf.float32, [None, 5])
+        #self.embedding_overlap = tf.get_variable("embedding_overlap", [3, config.overlapdim], initializer=tf.random_normal_initializer(mean=0.0, stddev=0.25, dtype=tf.float32))
+
         with tf.device("/cpu:0"):
             self.q_inputs = tf.nn.embedding_lookup(self.embedding, self.q_data)
             self.a_inputs = tf.nn.embedding_lookup(self.embedding, self.a_data)
+            self.embedding_overlap = tf.get_variable("embedding_overlap", [3, config.overlapdim], initializer=tf.random_normal_initializer(mean=0.0, stddev=0.25, dtype=tf.float32))
             self.q_overlp = tf.nn.embedding_lookup(self.embedding_overlap, self.q_overlap)
             self.a_overlp = tf.nn.embedding_lookup(self.embedding_overlap, self.a_overlap)
 
 
+        #concattenate the data features with overlaping features
+        q_input_with_feat = tf.concat(2, [self.q_inputs, self.q_overlp])
+        a_input_with_feat = tf.concat(2, [self.a_inputs, self.a_overlp])
+
         # expand dims to [batch, height, width, channel] = [#sentence, #word, dim, 1]
-        self.q_tf_in = tf.expand_dims(self.q_inputs, 3)
-        self.a_tf_in = tf.expand_dims(self.a_inputs, 3)
+        self.q_tf_in = tf.expand_dims(q_input_with_feat, 3)
+        self.a_tf_in = tf.expand_dims(a_input_with_feat, 3)
         
         # define the filter: [filter_height, filter_width, in_channels, out_channels]
         q_filter = tf.get_variable("q_filter", [config.q_filter_widths, 
-                                                     config.ndim,
+                                                     config.worddim + config.overlapdim,
                                                      1,
                                                      config.nkernels])
-        q_stride = [1, 1, config.ndim, 1]
+        q_stride = [1, 1, config.worddim + config.overlapdim, 1]
         q_conv = tf.nn.conv2d(input=self.q_tf_in, filter=q_filter, strides=q_stride, padding="SAME")
         q_bias = tf.get_variable("q_bias", [config.nkernels], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
         q_act = tf.tanh(tf.nn.bias_add(q_conv, q_bias))
@@ -84,10 +94,10 @@ class DeepQAModel(object):
 
         # define the filter: [filter_height, filter_width, in_channels, out_channels]
         a_filter = tf.get_variable("a_filter", [config.a_filter_widths, 
-                                                     config.ndim,
+                                                     config.worddim + config.overlapdim,
                                                      1,
                                                      config.nkernels])
-        a_stride = [1, 1, config.ndim, 1]
+        a_stride = [1, 1, config.worddim + config.overlapdim, 1]
         a_conv = tf.nn.conv2d(input=self.a_tf_in, filter=a_filter, strides=a_stride, padding="SAME")
         a_bias = tf.get_variable("a_bias", [config.nkernels], initializer=tf.constant_initializer(value=0.1, dtype=tf.float32))
         a_act = tf.tanh(tf.nn.bias_add(a_conv, a_bias))
@@ -112,7 +122,7 @@ class DeepQAModel(object):
         self.loss = tf.contrib.losses.softmax_cross_entropy(logits, onehot_labels)
 
         # apply L2 regularization
-        self.reg_loss = self.loss + tf.contrib.layers.apply_regularization(tf.contrib.layers.l2_regularizer(1e-2), [q_filter, q_bias, a_filter, a_bias, sim_mat, W1, b1, W2, b2])
+        self.reg_loss = self.loss + tf.contrib.layers.apply_regularization(tf.contrib.layers.l2_regularizer(config.l2_reg), [q_filter, q_bias, a_filter, a_bias, sim_mat, W1, b1, W2, b2])
 
         self.y_hat = tf.argmax(tf.nn.softmax(logits),1)
         self.y_score = tf.nn.softmax(logits)
@@ -199,7 +209,7 @@ def main(_):
     y_test = np.load(os.path.join(data_dir, 'test.labels.npy'))
     qids_test = np.load(os.path.join(data_dir, 'test.qids.npy'))
 
-    print("overlap:", q_overlap_train[-10:, -10:], a_overlap_train[-10:, -10:])    
+    print("overlap:", q_overlap_train.shape, a_overlap_train.shape)    
 
     print('y_train:', np.unique(y_train, return_counts=True), y_train.shape, y_train[:10])
     print('y_dev:', np.unique(y_dev, return_counts=True))
@@ -238,6 +248,8 @@ def main(_):
 
 
     config = get_config()
+    config.l2_reg = FLAGS.l2_reg
+    print("l2 regularization: ", config.l2_reg)
     eval_config = get_config()
 
     #with tf.Graph().as_default, tf.Session() as session:
@@ -252,14 +264,16 @@ def main(_):
         tf.initialize_all_variables().run()
 
         i = 0
-        for epoch in range(1000):
-            train_data = [q_train, a_train, y_train]
+        for epoch in range(5000):
+            train_data = [q_train, a_train, y_train, q_overlap_train, a_overlap_train]
             batches = enumerate(batch_iter(train_data, config.batch_size))
             for _, batch_data in batches:
-                q_batch, a_batch, y_batch = batch_data
+                q_batch, a_batch, y_batch, q_overlap_batch, a_overlap_batch = batch_data
                 step = session.run([m.train_step], 
                         {m.q_data : q_batch,
                          m.a_data : a_batch,
+                         m.q_overlap : q_overlap_batch,
+                         m.a_overlap : a_overlap_batch,
                          m.embedding : vocab_emb,
                          m.labels : y_batch})
 
@@ -267,6 +281,8 @@ def main(_):
                     loss, acc = session.run([mv.reg_loss, mv.accuracy], 
                                 {mv.q_data : q_train,
                                  mv.a_data : a_train,
+                                 mv.q_overlap : q_overlap_train,
+                                 mv.a_overlap : a_overlap_train,
                                  mv.embedding : vocab_emb,
                                  mv.labels : y_train})
                     print("[TRAIN] Step %4d, acc=%5.5f, loss=%5.5f" %(i, acc, loss))
@@ -274,12 +290,25 @@ def main(_):
                     y_score, acc = session.run([mv.y_score, mv.accuracy], 
                                 {mv.q_data : q_dev,
                                  mv.a_data : a_dev,
+                                 mv.q_overlap : q_overlap_dev,
+                                 mv.a_overlap : a_overlap_dev,
                                  mv.embedding : vocab_emb,
                                  mv.labels : y_dev})
                     #print(qids_dev.shape, y_dev.shape, y_score.shape)
                     map_sc = map_score(qids_dev, y_dev, y_score[:,1])
                     print("[TRAIN] Step %4d, ============ MAP =======: %5.5f" %(i, map_sc))
                 i += 1
+
+        # test the model
+        y_score, acc = session.run([mv.y_score, mv.accuracy], 
+                                {mv.q_data : q_test,
+                                 mv.a_data : a_test,
+                                 mv.q_overlap : q_overlap_test,
+                                 mv.a_overlap : a_overlap_test,
+                                 mv.embedding : vocab_emb,
+                                 mv.labels : y_test})
+        map_sc = map_score(qids_test, y_test, y_score[:,1])
+        print("[TEST] ============ MAP =======: %5.5f" %(map_sc))
 
         session.close()
 
