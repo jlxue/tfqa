@@ -25,6 +25,21 @@ flags.DEFINE_string("config", "default", "The config names")
 flags.DEFINE_float("l2_reg", 3e-3, "l2 regularization")
 FLAGS = flags.FLAGS
 
+def layer_norm(input, beta, gamma, epsilon = 1e-5, max = 1000):
+
+    """ Layer normalizes a 2D tensor along its second axis, which corresponds to batch """
+    with tf.device("/cpu:0"):
+        mean, var = tf.nn.moments(input, [1], keep_dims=True)
+    normalised_input = (input - mean) / tf.sqrt(var + epsilon)
+    return normalised_input * gamma + beta
+
+def batch_norm(input, beta, gamma, epsilon = 1e-5, max = 1000):
+    """ Batch normalizes a 2D tensor along its first axis """
+    with tf.device("/cpu:0"):
+        mean, var = tf.nn.moments(active1, [0])
+    return tf.nn.batch_normalization(input, mean, var, beta, gamma, epsilon)
+
+
 class DefaultConfig(object):
     """The hyper parameters."""
     n_outs = 2
@@ -40,6 +55,8 @@ class DefaultConfig(object):
     a_k_max = 1
     q_filter_widths = 5
     a_filter_widths = 5
+    max_q_len = 100
+    max_a_len = 100
     init_scale = 0.25
     l2_reg = 1e-4
 
@@ -54,10 +71,10 @@ class DefaultConfig(object):
 
 class DeepQAModel(object):
     def __init__(self, is_training, config):
-        self.q_data = tf.placeholder(tf.int32, [None, 33])
-        self.a_data = tf.placeholder(tf.int32, [None, 40])
-        self.q_overlap = tf.placeholder(tf.int32, [None, 33])
-        self.a_overlap = tf.placeholder(tf.int32, [None, 40])
+        self.q_data = tf.placeholder(tf.int32, [None, config.q_len])
+        self.a_data = tf.placeholder(tf.int32, [None, config.a_len])
+        self.q_overlap = tf.placeholder(tf.int32, [None, config.q_len])
+        self.a_overlap = tf.placeholder(tf.int32, [None, config.a_len])
     
         self.embedding = tf.placeholder(tf.float32, [None, config.worddim])
         #self.embedding_overlap = tf.placeholder(tf.float32, [None, 5])
@@ -113,15 +130,23 @@ class DeepQAModel(object):
         b1 = tf.get_variable("b1", [ndim], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
         l1_out = tf.tanh(tf.nn.bias_add(tf.matmul(self.concat, W1), b1))
 
+        #active1 = tf.matmul(self.concat, W1)
+        #batch (or layer) normalization
+        #beta1 = tf.get_variable("beta1", [ndim], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
+        #gamma1 = tf.get_variable("gamma1", [ndim], initializer=tf.constant_initializer(value=1.0, dtype=tf.float32))
+        #l1_out = tf.tanh(batch_norm(active1, beta1, gamma1))
+        #l1_out = tf.tanh(layer_norm(active1, beta1, gamma1))
+
         W2 = tf.get_variable("W2", [ndim, 2], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
         b2 = tf.get_variable("b2", [2], initializer=tf.constant_initializer(value=0.0, dtype=tf.float32))
-
         logits = tf.nn.bias_add(tf.matmul(l1_out, W2), b2)
+
         self.labels = tf.placeholder(tf.int32, [None])
         onehot_labels = tf.one_hot(self.labels, 2)
         self.loss = tf.contrib.losses.softmax_cross_entropy(logits, onehot_labels)
 
         # apply L2 regularization
+        #self.reg_loss = self.loss + tf.contrib.layers.apply_regularization(tf.contrib.layers.l2_regularizer(config.l2_reg), [q_filter, q_bias, a_filter, a_bias, sim_mat, W1, beta1, gamma1, W2, b2])
         self.reg_loss = self.loss + tf.contrib.layers.apply_regularization(tf.contrib.layers.l2_regularizer(config.l2_reg), [q_filter, q_bias, a_filter, a_bias, sim_mat, W1, b1, W2, b2])
 
         self.y_hat = tf.argmax(tf.nn.softmax(logits),1)
@@ -188,12 +213,14 @@ def main(_):
         q_overlap_train = np.load(os.path.join(data_dir, 'train-all.q_overlap_indices.npy'))
         a_overlap_train = np.load(os.path.join(data_dir, 'train-all.a_overlap_indices.npy'))
         y_train = np.load(os.path.join(data_dir, 'train-all.labels.npy'))
+        qids_train = np.load(os.path.join(data_dir, 'train-all.qids.npy'))
     else:
         q_train = np.load(os.path.join(data_dir, 'train.questions.npy'))
         a_train = np.load(os.path.join(data_dir, 'train.answers.npy'))
         q_overlap_train = np.load(os.path.join(data_dir, 'train.q_overlap_indices.npy'))
         a_overlap_train = np.load(os.path.join(data_dir, 'train.a_overlap_indices.npy'))
         y_train = np.load(os.path.join(data_dir, 'train.labels.npy'))
+        qids_train = np.load(os.path.join(data_dir, 'train.qids.npy'))
     
     q_dev = np.load(os.path.join(data_dir, 'dev.questions.npy'))
     a_dev = np.load(os.path.join(data_dir, 'dev.answers.npy'))
@@ -250,7 +277,8 @@ def main(_):
     config = get_config()
     config.l2_reg = FLAGS.l2_reg
     print("l2 regularization: ", config.l2_reg)
-    eval_config = get_config()
+    config.q_len = q_max_sent_size
+    config.a_len = a_max_sent_size
 
     #with tf.Graph().as_default, tf.Session() as session:
     with tf.Session() as session:
@@ -264,7 +292,7 @@ def main(_):
         tf.initialize_all_variables().run()
 
         i = 0
-        for epoch in range(5000):
+        for epoch in range(100):
             train_data = [q_train, a_train, y_train, q_overlap_train, a_overlap_train]
             batches = enumerate(batch_iter(train_data, config.batch_size))
             for _, batch_data in batches:
@@ -276,39 +304,40 @@ def main(_):
                          m.a_overlap : a_overlap_batch,
                          m.embedding : vocab_emb,
                          m.labels : y_batch})
+            i += 1
 
-                if i % 100 == 0:
-                    loss, acc = session.run([mv.reg_loss, mv.accuracy], 
-                                {mv.q_data : q_train,
-                                 mv.a_data : a_train,
-                                 mv.q_overlap : q_overlap_train,
-                                 mv.a_overlap : a_overlap_train,
-                                 mv.embedding : vocab_emb,
-                                 mv.labels : y_train})
-                    print("[TRAIN] Step %4d, acc=%5.5f, loss=%5.5f" %(i, acc, loss))
-                    
-                    y_score, acc = session.run([mv.y_score, mv.accuracy], 
-                                {mv.q_data : q_dev,
-                                 mv.a_data : a_dev,
-                                 mv.q_overlap : q_overlap_dev,
-                                 mv.a_overlap : a_overlap_dev,
-                                 mv.embedding : vocab_emb,
-                                 mv.labels : y_dev})
-                    #print(qids_dev.shape, y_dev.shape, y_score.shape)
-                    map_sc = map_score(qids_dev, y_dev, y_score[:,1])
-                    print("[TRAIN] Step %4d, ============ MAP =======: %5.5f" %(i, map_sc))
-                i += 1
+            loss, acc, y_score = session.run([mv.reg_loss, mv.accuracy, mv.y_score], 
+                        {mv.q_data : q_train,
+                         mv.a_data : a_train,
+                         mv.q_overlap : q_overlap_train,
+                         mv.a_overlap : a_overlap_train,
+                         mv.embedding : vocab_emb,
+                         mv.labels : y_train})
+            print("[TRAIN] Epoch %3d acc=%5.5f, loss=%5.5f" %(epoch, acc, loss))
+            map_sc = map_score(qids_train, y_train, y_score[:,1])
+            print("[TRAIN] Epoch %3d ============ MAP =======: %5.5f" %(epoch, map_sc))
 
-        # test the model
-        y_score, acc = session.run([mv.y_score, mv.accuracy], 
-                                {mv.q_data : q_test,
-                                 mv.a_data : a_test,
-                                 mv.q_overlap : q_overlap_test,
-                                 mv.a_overlap : a_overlap_test,
-                                 mv.embedding : vocab_emb,
-                                 mv.labels : y_test})
-        map_sc = map_score(qids_test, y_test, y_score[:,1])
-        print("[TEST] ============ MAP =======: %5.5f" %(map_sc))
+            y_score, acc = session.run([mv.y_score, mv.accuracy], 
+                        {mv.q_data : q_dev,
+                         mv.a_data : a_dev,
+                         mv.q_overlap : q_overlap_dev,
+                         mv.a_overlap : a_overlap_dev,
+                         mv.embedding : vocab_emb,
+                         mv.labels : y_dev})
+            #print(qids_dev.shape, y_dev.shape, y_score.shape)
+            map_sc = map_score(qids_dev, y_dev, y_score[:,1])
+            print("[ DEV ] Epoch %3d ============ MAP =======: %5.5f" %(epoch, map_sc))
+
+            # test the model
+            y_score, acc = session.run([mv.y_score, mv.accuracy], 
+                                    {mv.q_data : q_test,
+                                     mv.a_data : a_test,
+                                     mv.q_overlap : q_overlap_test,
+                                     mv.a_overlap : a_overlap_test,
+                                     mv.embedding : vocab_emb,
+                                     mv.labels : y_test})
+            map_sc = map_score(qids_test, y_test, y_score[:,1])
+            print("[ TEST] Epoch %3d ============ MAP =======: %5.5f" %(epoch, map_sc))
 
         session.close()
 
